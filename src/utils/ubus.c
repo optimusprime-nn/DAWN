@@ -231,6 +231,15 @@ void ubus_set_nr();
 static int build_hearing_map_sort_client(struct blob_buf* b);
 
 /*** CODE START ***/
+
+// SSIDs are used as JSON object keys in get_network / get_hearing_map. An
+// empty key makes blobmsg_format_json() print invalid JSON ("{ {"), which
+// breaks ubus callers such as LuCI - and a peer can report an AP without an
+// SSID, or iwinfo may fail to read one.
+static const char *ssid_table_name(const uint8_t *ssid) {
+    return ssid[0] ? (const char *)ssid : "(unknown SSID)";
+}
+
 void add_client_update_timer(time_t time) {
     uloop_timeout_set(&client_timer, time);
 }
@@ -2057,7 +2066,7 @@ int build_hearing_map_sort_client(struct blob_buf *b) {
     {
         // Add new outer sections if needed
         if (!same_ssid) {
-            ssid_list = blobmsg_open_table(b, (char*)this_entry->ap_k->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(this_entry->ap_k->ssid));
             same_ssid = true;
         }
 
@@ -2152,7 +2161,7 @@ int build_network_overview(struct blob_buf *b) {
     for (ap* m = ap_set; m != NULL; m = m->next_ap) {
         if(add_ssid)
         {
-            ssid_list = blobmsg_open_table(b, (char *) m->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(m->ssid));
             add_ssid = false;
         }
         sprintf(ap_mac_buf, MACSTR, MAC2STR(m->bssid_addr.u8));
