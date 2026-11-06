@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <ctype.h>
 
+#include "dawn_stats.h"
 #include "dawn_iwinfo.h"
 #include "memory_utils.h"
 
@@ -64,13 +65,18 @@ int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struc
 }
 
 
+// When set (the default), kick stubs fake the client moving to the
+// recommended AP. 'sim_moves 0' leaves that to the script, so the result of
+// the request looks like real hostapd success (0).
+static int simulate_moves = 1;
+
 int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, int threshold, uint32_t duration)
 {
 int ret = 0;
 
     printf("wnm_disassoc_imminent() was called...\n");
 
-    if (neighbor_list != NULL)
+    if (neighbor_list != NULL && simulate_moves)
     {
         // Fake a client being disassociated and then rejoining on the recommended neighbor
         client *mc = client_array_get_client(client_addr);
@@ -313,7 +319,8 @@ static int load_int_band(int* v, char* s)
 {
   int ret = 0;
   sscanf(s, "%" "d", v);
-  v[1] = v[0];
+  for (int band = 1; band < __DAWN_BAND_MAX; band++)
+    v[band] = v[0];
   return ret;
 }
 
@@ -472,6 +479,26 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
 
             print_client_array();
         }
+        else if (strcmp(*argv, "sim_moves") == 0)
+        {
+            args_required = 2;
+            if (curr_arg + args_required <= argc)
+                simulate_moves = atoi(argv[1]);
+        }
+        else if (strcmp(*argv, "stats_show") == 0)
+        {
+            args_required = 1;
+
+            printf("stats: evaluations=%u stays=%u deferred=%u sent_rssi_compare=%u sent_absolute_rssi=%u moved=%u stayed=%u failed=%u\n",
+                dawn_stats.evaluations, dawn_stats.stays, dawn_stats.kicks_deferred,
+                dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE], dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI],
+                dawn_stats.kicks_moved, dawn_stats.kicks_stayed, dawn_stats.kicks_failed);
+            for (int i = 0; i < dawn_stats.recent_count; i++)
+                printf("stats: kick " MACSTR " from " MACSTR " to " MACSTR " %s %s\n",
+                    MAC2STR(dawn_stats.recent[i].client.u8), MAC2STR(dawn_stats.recent[i].from.u8),
+                    MAC2STR(dawn_stats.recent[i].to.u8), stats_method_name(dawn_stats.recent[i].method),
+                    stats_outcome_name(dawn_stats.recent[i].outcome));
+        }
         else if (strcmp(*argv, "ap_add_auto") == 0)
         {
             args_required = 3;
@@ -626,6 +653,22 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                     dawn_metric.rrm_mode_order[0] = WLAN_RRM_CAPS_BEACON_REPORT_PASSIVE;
                     dawn_metric.rrm_mode_order[1] = WLAN_RRM_CAPS_BEACON_REPORT_ACTIVE;
                     dawn_metric.rrm_mode_order[2] = WLAN_RRM_CAPS_BEACON_REPORT_TABLE;
+
+                    // 6 GHz: same as 5 GHz
+                    dawn_metric.ap_weight[2] = dawn_metric.ap_weight[1];
+                    dawn_metric.ht_support[2] = dawn_metric.ht_support[1];
+                    dawn_metric.vht_support[2] = dawn_metric.vht_support[1];
+                    dawn_metric.no_ht_support[2] = dawn_metric.no_ht_support[1];
+                    dawn_metric.no_vht_support[2] = dawn_metric.no_vht_support[1];
+                    dawn_metric.rssi[2] = dawn_metric.rssi[1];
+                    dawn_metric.low_rssi[2] = dawn_metric.low_rssi[1];
+                    dawn_metric.initial_score[2] = dawn_metric.initial_score[1];
+                    dawn_metric.chan_util[2] = dawn_metric.chan_util[1];
+                    dawn_metric.max_chan_util[2] = dawn_metric.max_chan_util[1];
+                    dawn_metric.rssi_val[2] = dawn_metric.rssi_val[1];
+                    dawn_metric.low_rssi_val[2] = dawn_metric.low_rssi_val[1];
+                    dawn_metric.chan_util_val[2] = dawn_metric.chan_util_val[1];
+                    dawn_metric.max_chan_util_val[2] = dawn_metric.max_chan_util_val[1];
                 }
                 else if (!strncmp(fn, "ap_weight=", 10)) load_int_band(dawn_metric.ap_weight, fn + 10);
                 else if (!strncmp(fn, "ht_support=", 11)) load_int_band(dawn_metric.ht_support, fn + 11);
@@ -635,6 +678,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 else if (!strncmp(fn, "rssi=", 5)) load_int_band(dawn_metric.rssi, fn + 5);
                 else if (!strncmp(fn, "low_rssi=", 9)) load_int_band(dawn_metric.low_rssi, fn + 9);
                 else if (!strncmp(fn, "freq=", 5)) load_int(&dawn_metric.initial_score[1], fn + 5);
+                else if (!strncmp(fn, "initial_score_6g=", 17)) load_int(&dawn_metric.initial_score[2], fn + 17);
                 else if (!strncmp(fn, "chan_util=", 10)) load_int_band(dawn_metric.chan_util, fn + 10);
                 else if (!strncmp(fn, "max_chan_util=", 14)) load_int_band(dawn_metric.max_chan_util, fn + 14);
                 else if (!strncmp(fn, "rssi_val=", 9)) load_int_band(dawn_metric.rssi_val, fn + 9);
@@ -782,8 +826,8 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 else if (!strncmp(fn, "preauth=", 8)) load_u8(&cl0->preauth, fn + 8);
                 else if (!strncmp(fn, "wds=", 4)) load_u8(&cl0->wds, fn + 4);
                 else if (!strncmp(fn, "wmm=", 4)) load_u8(&cl0->wmm, fn + 4);
-                else if (!strncmp(fn, "ht_cap=", 3)) load_u8(&cl0->ht, fn + 3);
-                else if (!strncmp(fn, "vht_cap=", 4)) load_u8(&cl0->vht, fn + 4);
+                else if (!strncmp(fn, "ht_cap=", 7)) load_u8(&cl0->ht, fn + 7);
+                else if (!strncmp(fn, "vht_cap=", 8)) load_u8(&cl0->vht, fn + 8);
                 else if (!strncmp(fn, "wps=", 4)) load_u8(&cl0->wps, fn + 4);
                 else if (!strncmp(fn, "mfp=", 4)) load_u8(&cl0->mfp, fn + 4);
                 else if (!strncmp(fn, "time=", 5)) load_time(&cl0->time, fn + 5);
