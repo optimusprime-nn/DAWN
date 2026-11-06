@@ -80,6 +80,23 @@ value then a "soft" kick is done, which asks the device to look at other APs
 but does not enforce this through a disconnection. Forced disconnection would be disruptive to legacy clients that may not be able to find a suitable AP to
 connect to.
 
+### Stubborn clients
+DAWN asks a client to move at most once a minute, and not at all for 5
+minutes after it moved away (the old AP keeps listing a station that left
+silently for that long, hostapd's `ap_max_inactivity`). "Weak signal"
+(absolute RSSI) steering only proposes APs that hear the client at least
+6 dB better; a client that is weak everywhere is left alone.
+
+Some clients ignore 802.11v requests, reject them, or move and come
+straight back (re-associate within 10 minutes) to the AP they were sent
+away from. After `steer_max_misses` such outcomes in a row (default 2)
+DAWN backs off from that client for `steer_backoff` seconds (default
+3600): it only sends a friendly BSS transition request (no disassociation,
+no "don't come back" timer), at most once every 5 minutes. If the client
+needs another backoff after that, it is twice as long, and so on up to a
+day (friendly requests up to hourly). A move that sticks for 10 minutes
+resets all of this.
+
 ### Other Features
 The following are less likely to need attention:
 - The way 802.11v Neighbor Reports are generated can be adjusted.
@@ -166,6 +183,8 @@ grep 'CONFIG-G:' `find . -type f -name "*.[ch]"`| sed 's/^.*CONFIG-.: *\(.*\)$/|
 |neighbors|Space separated list of MACS to use in "static" AP Neighbor Report| None|
 |rrm_mode|Preferred order for using Passive, Active or Table 802.11k BEACON information|[PAT] String of 'P', 'A' and / or 'T'|
 |set_hostapd_nr|Method used to set Neighbor Report on AP|[0 = Disabled]; 1 = "Static" based on all APs in network (plus set from configuration); 2 = "Dynamic" based on next nearest AP seen by current clients|
+|steer_backoff|Seconds a client that keeps ignoring steering only gets friendly (non-forcing) requests|[3600]|
+|steer_max_misses|Ignored, rejected or bounced-back steering requests in a row before backing off from a client|0 = Never back off; [2]|
 |use_station_count|Compare connected station counts when considering kicking|[0 = Disabled]; 1 = Enabled|
 
 ## Per Band Metric Parameters

@@ -78,6 +78,8 @@ struct probe_metric_s {
     int kicking;
     int kicking_threshold;
     int duration;
+    int steer_max_misses;   // consecutive ignored kicks before backoff; 0 = never back off
+    int steer_backoff;      // seconds a client only gets friendly (non-disconnecting) requests
     int rrm_mode_mask;
     int rrm_mode_order[__RRM_BEACON_RQST_MODE_MAX];
 
@@ -155,6 +157,9 @@ extern struct probe_metric_s dawn_metric;
 /* Probe, Auth, Assoc */
 
 #define SSID_MAX_LEN 32
+
+// Absolute RSSI steering: only propose APs that hear the client at least this much better
+#define ABSOLUTE_RSSI_MARGIN 6
 
 // Upper bound on the "never kick" MAC list (and so /tmp/dawn_mac_list)
 #define MAC_LIST_MAX 1024
