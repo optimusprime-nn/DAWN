@@ -231,6 +231,15 @@ void ubus_set_nr();
 static int build_hearing_map_sort_client(struct blob_buf* b);
 
 /*** CODE START ***/
+
+// SSIDs are used as JSON object keys in get_network / get_hearing_map. An
+// empty key makes blobmsg_format_json() print invalid JSON ("{ {"), which
+// breaks ubus callers such as LuCI - and a peer can report an AP without an
+// SSID, or iwinfo may fail to read one.
+static const char *ssid_table_name(const uint8_t *ssid) {
+    return ssid[0] ? (const char *)ssid : "(unknown SSID)";
+}
+
 void add_client_update_timer(time_t time) {
     uloop_timeout_set(&client_timer, time);
 }
@@ -1353,7 +1362,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
     if (!msg)
         return;
 
-    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_MAX, tb, blob_data(msg), blob_len(msg));
+    // (Was parsed with __DAWN_UMDNS_MAX = 2 into this 1-entry array and
+    // 1-entry policy: a stack overflow on every umdns browse.)
+    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_TABLE_MAX, tb, blob_data(msg), blob_len(msg));
 
     if (!tb[DAWN_UMDNS_TABLE]) {
         return;
@@ -1376,7 +1387,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
             dawnlog_debug("IPV4: %s\n", blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]));
             dawnlog_debug("Port: %d\n", blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
         } else {
-            return; // TODO: We're in a loop. Should this be return or continue?
+            // Skip just this entry (e.g. an IPv6-only announcement). This used
+            // to return, so every peer listed after it was never connected to.
+            continue;
         }
         add_tcp_connection(blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]), blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
     }
@@ -1522,12 +1535,16 @@ int parse_add_mac_to_file(struct blob_attr *msg) {
             continue;
         }
 
-        // Returns item if it was new and added
-        if (insert_to_maclist(addr)) {
-            // TODO: File can grow arbitarily large.  Resource consumption risk.
-            // TODO: Consolidate use of file across source: shared resource for name, single point of access?
+        // Returns item if it was new and added. The list is read by the
+        // kicking logic under client_array_mutex, and this can run on the UDP
+        // receive thread in broadcast / multicast mode, so take the same lock.
+        dawn_mutex_lock(&client_array_mutex);
+        bool added = insert_to_maclist(addr) != NULL;
+        dawn_mutex_unlock(&client_array_mutex);
+
+        // Bounded by MAC_LIST_MAX: only new entries are appended
+        if (added)
             write_mac_to_file("/tmp/dawn_mac_list", addr);
-        }
     }
 
     return 0;
@@ -2049,7 +2066,7 @@ int build_hearing_map_sort_client(struct blob_buf *b) {
     {
         // Add new outer sections if needed
         if (!same_ssid) {
-            ssid_list = blobmsg_open_table(b, (char*)this_entry->ap_k->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(this_entry->ap_k->ssid));
             same_ssid = true;
         }
 
@@ -2144,7 +2161,7 @@ int build_network_overview(struct blob_buf *b) {
     for (ap* m = ap_set; m != NULL; m = m->next_ap) {
         if(add_ssid)
         {
-            ssid_list = blobmsg_open_table(b, (char *) m->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(m->ssid));
             add_ssid = false;
         }
         sprintf(ap_mac_buf, MACSTR, MAC2STR(m->bssid_addr.u8));
